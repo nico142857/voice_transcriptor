@@ -73,3 +73,11 @@ The transcription will be saved as a `.txt` file in the same directory as the in
 ## Troubleshooting
 -   **First Run Slowness**: The first time you run the script, it downloads the Whisper and Pyannote models (several GBs). Subsequent runs will be faster.
 -   **Memory Issues**: If you run out of memory, try editing `transcribe.py` to use a smaller model (e.g., `model_size="medium"` or `model_size="small"`).
+
+## Dependency Notes
+**Critical**: This project relies on a specific combination of libraries to work on macOS (Apple Silicon) without errors.
+-   **PyTorch/Torchaudio 2.5.1**: Used instead of the newer 2.8+ versions often requested by pip, to ensure stability with `micromamba` and MPS (Metal Performance Shaders).
+-   **Transformers 4.48.0**: Pinned to avoid import errors with PyTorch 2.5.1.
+-   **WhisperX**: Installed from source to get the latest features.
+
+**Warning**: Do not manually `pip install --upgrade` these packages, or you may break the environment (e.g., getting `symbol not found` or `OSError: libjpeg` errors). Always use `micromamba env update --file environment.yml`.

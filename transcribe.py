@@ -25,18 +25,27 @@ def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" 
     """
     Transcribes and diarizes the given audio file.
     """
-    print(f"Loading WhisperX model: {model_size} on {device}...")
-    
     # Metal Performance Shaders (MPS) for Mac
     if torch.backends.mps.is_available():
         device = "mps"
-        compute_type = "float32" # MPS often requires float32 for some ops, or at least whisperx might default to it
+        asr_device = "cpu" # WhisperX/CTranslate2 often lacks MPS support
+        compute_type = "float32" # General compute type for MPS
+        asr_compute_type = "int8" # CPU ASR is faster with int8
     elif device == "cpu":
-        compute_type = "int8" # quantize for CPU speed
+        device = "cpu"
+        asr_device = "cpu"
+        compute_type = "int8"
+        asr_compute_type = "int8"
+    else:
+        asr_device = device
+        asr_compute_type = compute_type
+
+    print(f"Loading WhisperX model: {model_size} on {asr_device} (compute_type={asr_compute_type})...")
+    print(f"  - Alignment/Diarization device: {device}")
         
     try:
         # 1. Transcribe with original whisper (batched)
-        model = whisperx.load_model(model_size, device, compute_type=compute_type)
+        model = whisperx.load_model(model_size, asr_device, compute_type=asr_compute_type)
         
         print(f"Transcribing {audio_path}...")
         audio = whisperx.load_audio(audio_path)
@@ -52,6 +61,8 @@ def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" 
         gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
+        elif device == "mps":
+             torch.mps.empty_cache()
 
         # 3. Diarization
         print("Performing speaker diarization...")
