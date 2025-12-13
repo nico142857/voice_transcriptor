@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Mac
+.DS_Store
+
+# Media files (don't commit large audio files)
+*.m4a
+*.mp3
+*.wav
+*.aiff
+*.txt
+
+# IDE
+.vscode/
+.idea/
