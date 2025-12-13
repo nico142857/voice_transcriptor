@@ -85,21 +85,50 @@ def format_timestamp(seconds):
     h, m = divmod(m, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+def process_file(file_path, hf_token):
+    """Processes a single file."""
+    print(f"\n--- Processing: {file_path} ---")
+    
+    # Determine output path always in 'output' folder if it exists
+    base_name = os.path.basename(file_path)
+    file_name = os.path.splitext(base_name)[0]
+    
+    # Ensure output directory exists
+    output_dir = "output"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    output_file = os.path.join(output_dir, f"{file_name}.txt")
+
+    if os.path.exists(output_file):
+        print(f"Output file already exists: {output_file}. Skipping...")
+        return
+
+    result = transcribe_audio(file_path, hf_token)
+    
+    if result:
+        format_output(result, output_file)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Voice Transcriptor using WhisperX")
-    parser.add_argument("audio_file", help="Path to the .m4a audio file")
+    parser.add_argument("filename", help="Name of the audio file (looks in 'input/' folder first, then current path)")
     
     args = parser.parse_args()
     
-    if not os.path.exists(args.audio_file):
-        print(f"Error: File not found: {args.audio_file}")
+    # Resolve file path
+    input_folder = "input"
+    file_path = args.filename
+    
+    # 1. Check if it's in input folder (preferred)
+    possible_path = os.path.join(input_folder, args.filename)
+    if os.path.exists(possible_path):
+        file_path = possible_path
+    elif not os.path.exists(file_path):
+        # 2. If not in input, and not found as absolute/relative path -> Error
+        print(f"Error: File not found: {args.filename}")
+        print(f"Checked: '{file_path}' and '{possible_path}'")
         exit(1)
 
     hf_token = check_hf_token()
     
-    output_file = os.path.splitext(args.audio_file)[0] + ".txt"
-    
-    result = transcribe_audio(args.audio_file, hf_token)
-    
-    if result:
-        format_output(result, output_file)
+    process_file(file_path, hf_token)

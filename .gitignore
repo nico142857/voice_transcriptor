@@ -14,7 +14,14 @@ __pycache__/
 *.mp3
 *.wav
 *.aiff
-*.txt
+# *.txt # Allow txt generally, but ignore in output
+
+# Input/Output folders
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+
 
 # IDE
 .vscode/

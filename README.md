@@ -51,11 +51,15 @@ A Python tool to transcribe and diarize (distinguish speakers) audio files in En
 
 ## Usage
 
-Run the script with your audio file (supports `.m4a`):
+## Usage
 
-```bash
-python transcribe.py your_audio_file.m4a
-```
+1.  Put your audio files (e.g., `interview.m4a`) into the `input` folder.
+2.  Run the script with the filename:
+    ```bash
+    python transcribe.py interview.m4a
+    ```
+    *(Note: You don't need to type `input/interview.m4a`, just the name)*
+3.  Collect your transcriptions from the `output` folder.
 
 ### Output
 The transcription will be saved as a `.txt` file in the same directory as the input audio.
