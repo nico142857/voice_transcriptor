@@ -2,11 +2,16 @@ import argparse
 import os
 import torch
 import whisperx
+import whisperx.diarize
 import gc
 from dotenv import load_dotenv
+from huggingface_hub import login
 
 # Load environment variables from .env file if it exists
 load_dotenv()
+
+# Enable PyTorch MPS fallback for operations not supported on Mac GPU
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 def check_hf_token():
     """Calculates or prompts for Hugging Face token."""
@@ -19,6 +24,14 @@ def check_hf_token():
         if not token:
             print("No token provided. Exiting.")
             exit(1)
+    
+    # Authenticate with Hugging Face Hub (required for Pyannote)
+    print("Authenticating with Hugging Face...")
+    try:
+        login(token=token)
+    except Exception as e:
+        print(f"Warning: Login failed: {e}")
+
     return token
 
 def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16"):
@@ -66,7 +79,7 @@ def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" 
 
         # 3. Diarization
         print("Performing speaker diarization...")
-        diarize_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
+        diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=device)
         diar_segments = diarize_model(audio)
         
         result = whisperx.assign_word_speakers(diar_segments, result)
