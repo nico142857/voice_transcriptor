@@ -34,7 +34,7 @@ def check_hf_token():
 
     return token
 
-def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16"):
+def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16", threads=4, language=None):
     """
     Transcribes and diarizes the given audio file.
     """
@@ -53,16 +53,24 @@ def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" 
         asr_device = device
         asr_compute_type = compute_type
 
-    print(f"Loading WhisperX model: {model_size} on {asr_device} (compute_type={asr_compute_type})...")
+    print(f"Loading WhisperX model: {model_size} on {asr_device} (compute_type={asr_compute_type}, threads={threads})...")
     print(f"  - Alignment/Diarization device: {device}")
         
     try:
         # 1. Transcribe with original whisper (batched)
-        model = whisperx.load_model(model_size, asr_device, compute_type=asr_compute_type)
+        # threads argument is passed via asr_options for CTranslate2 or directly if supported
+        model = whisperx.load_model(model_size, asr_device, compute_type=asr_compute_type, threads=threads)
         
         print(f"Transcribing {audio_path}...")
         audio = whisperx.load_audio(audio_path)
-        result = model.transcribe(audio, batch_size=16)
+        
+        # Pass language if provided
+        transcribe_args = {"batch_size": 16}
+        if language:
+            transcribe_args["language"] = language
+            print(f"  - Language forced to: {language}")
+            
+        result = model.transcribe(audio, **transcribe_args)
         
         # 2. Align whisper output
         print("Aligning transcription...")
@@ -109,7 +117,7 @@ def format_timestamp(seconds):
     h, m = divmod(m, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-def process_file(file_path, hf_token):
+def process_file(file_path, hf_token, args):
     """Processes a single file."""
     print(f"\n--- Processing: {file_path} ---")
     
@@ -128,7 +136,13 @@ def process_file(file_path, hf_token):
         print(f"Output file already exists: {output_file}. Skipping...")
         return
 
-    result = transcribe_audio(file_path, hf_token)
+    result = transcribe_audio(
+        file_path, 
+        hf_token, 
+        model_size=args.model, 
+        threads=args.threads, 
+        language=args.language
+    )
     
     if result:
         format_output(result, output_file)
@@ -136,6 +150,9 @@ def process_file(file_path, hf_token):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Voice Transcriptor using WhisperX")
     parser.add_argument("filename", help="Name of the audio file (looks in 'input/' folder first, then current path)")
+    parser.add_argument("--model", default="large-v2", help="Whisper model size (small, medium, large-v2). Default: large-v2")
+    parser.add_argument("--threads", type=int, default=4, help="Number of CPU threads for transcription. Default: 4")
+    parser.add_argument("--language", help="Force language code (e.g. 'en', 'fr', 'es') to skip detection")
     
     args = parser.parse_args()
     
@@ -155,4 +172,4 @@ if __name__ == "__main__":
 
     hf_token = check_hf_token()
     
-    process_file(file_path, hf_token)
+    process_file(file_path, hf_token, args)
