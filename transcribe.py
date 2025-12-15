@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 import torch
 import whisperx
 import whisperx.diarize
@@ -12,6 +13,13 @@ load_dotenv()
 
 # Enable PyTorch MPS fallback for operations not supported on Mac GPU
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+# Check if MLX is available (Apple Silicon only)
+try:
+    import mlx_whisper
+    MLX_AVAILABLE = True
+except ImportError:
+    MLX_AVAILABLE = False
 
 def check_hf_token():
     """Calculates or prompts for Hugging Face token."""
@@ -34,58 +42,127 @@ def check_hf_token():
 
     return token
 
-def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16", threads=4, language=None):
+def transcribe_with_mlx(audio_path, model_name="mlx-community/whisper-large-v3-turbo", language=None):
+    """
+    Transcribe using MLX-Whisper (Apple Silicon optimized).
+    Returns result dict compatible with whisperx alignment.
+    """
+    print(f"[MLX] Transcribing with model: {model_name}")
+    
+    transcribe_options = {}
+    if language:
+        transcribe_options["language"] = language
+        print(f"  - Language forced to: {language}")
+    
+    start_time = time.time()
+    result = mlx_whisper.transcribe(
+        audio_path,
+        path_or_hf_repo=model_name,
+        **transcribe_options
+    )
+    elapsed = time.time() - start_time
+    print(f"[MLX] Transcription completed in {elapsed:.1f} seconds")
+    
+    return result
+
+def transcribe_with_whisperx(audio_path, model_size, device, compute_type, threads, language):
+    """
+    Transcribe using WhisperX (CPU/CUDA).
+    Fallback for non-Apple Silicon systems.
+    """
+    print(f"[WhisperX] Loading model: {model_size} on {device} (compute_type={compute_type}, threads={threads})")
+    
+    model = whisperx.load_model(model_size, device, compute_type=compute_type, threads=threads)
+    
+    print(f"[WhisperX] Transcribing {audio_path}...")
+    audio = whisperx.load_audio(audio_path)
+    
+    transcribe_args = {"batch_size": 16}
+    if language:
+        transcribe_args["language"] = language
+        print(f"  - Language forced to: {language}")
+        
+    start_time = time.time()
+    result = model.transcribe(audio, **transcribe_args)
+    elapsed = time.time() - start_time
+    print(f"[WhisperX] Transcription completed in {elapsed:.1f} seconds")
+    
+    # Free up memory
+    del model
+    gc.collect()
+    
+    return result, audio
+
+def transcribe_audio(audio_path, hf_token, model_size="large-v3-turbo", backend="auto", threads=4, language=None):
     """
     Transcribes and diarizes the given audio file.
+    
+    Args:
+        backend: "auto" (MLX if available), "mlx", or "whisperx"
     """
-    # Metal Performance Shaders (MPS) for Mac
+    # Determine backend
+    use_mlx = False
+    if backend == "auto":
+        use_mlx = MLX_AVAILABLE and torch.backends.mps.is_available()
+    elif backend == "mlx":
+        if not MLX_AVAILABLE:
+            print("Error: MLX backend requested but mlx-whisper is not installed.")
+            return None
+        use_mlx = True
+    
+    # Determine device for alignment/diarization
     if torch.backends.mps.is_available():
         device = "mps"
-        asr_device = "cpu" # WhisperX/CTranslate2 often lacks MPS support
-        compute_type = "float32" # General compute type for MPS
-        asr_compute_type = "int8" # CPU ASR is faster with int8
-    elif device == "cpu":
-        device = "cpu"
-        asr_device = "cpu"
-        compute_type = "int8"
-        asr_compute_type = "int8"
+    elif torch.cuda.is_available():
+        device = "cuda"
     else:
-        asr_device = device
-        asr_compute_type = compute_type
-
-    print(f"Loading WhisperX model: {model_size} on {asr_device} (compute_type={asr_compute_type}, threads={threads})...")
-    print(f"  - Alignment/Diarization device: {device}")
-        
+        device = "cpu"
+    
+    print(f"\n--- Transcription Configuration ---")
+    print(f"  Backend: {'MLX (GPU)' if use_mlx else 'WhisperX (CPU)'}")
+    print(f"  Alignment/Diarization device: {device}")
+    print(f"-----------------------------------\n")
+    
     try:
-        # 1. Transcribe with original whisper (batched)
-        # threads argument is passed via asr_options for CTranslate2 or directly if supported
-        model = whisperx.load_model(model_size, asr_device, compute_type=asr_compute_type, threads=threads)
+        # 1. TRANSCRIPTION (the slow part - now using MLX!)
+        if use_mlx:
+            # Map model names for MLX
+            mlx_model_map = {
+                "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+                "large-v3": "mlx-community/whisper-large-v3-mlx",
+                "large-v2": "mlx-community/whisper-large-v2-mlx",
+                "medium": "mlx-community/whisper-medium-mlx",
+                "small": "mlx-community/whisper-small-mlx",
+                "base": "mlx-community/whisper-base-mlx",
+                "tiny": "mlx-community/whisper-tiny-mlx",
+            }
+            mlx_model = mlx_model_map.get(model_size, model_size)
+            result = transcribe_with_mlx(audio_path, mlx_model, language)
+            # Load audio for alignment/diarization
+            audio = whisperx.load_audio(audio_path)
+        else:
+            # Fallback to WhisperX
+            asr_device = "cpu" if device == "mps" else device
+            compute_type = "int8" if asr_device == "cpu" else "float16"
+            result, audio = transcribe_with_whisperx(
+                audio_path, model_size, asr_device, compute_type, threads, language
+            )
         
-        print(f"Transcribing {audio_path}...")
-        audio = whisperx.load_audio(audio_path)
-        
-        # Pass language if provided
-        transcribe_args = {"batch_size": 16}
-        if language:
-            transcribe_args["language"] = language
-            print(f"  - Language forced to: {language}")
-            
-        result = model.transcribe(audio, **transcribe_args)
-        
-        # 2. Align whisper output
+        # 2. ALIGNMENT (uses MPS on Mac - fast!)
         print("Aligning transcription...")
-        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+        detected_language = result.get("language", "en")
+        model_a, metadata = whisperx.load_align_model(language_code=detected_language, device=device)
         result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
         
-        # Clean up alignment model to save memory
+        # Clean up alignment model
         del model_a
         gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
         elif device == "mps":
-             torch.mps.empty_cache()
+            torch.mps.empty_cache()
 
-        # 3. Diarization
+        # 3. DIARIZATION (uses MPS on Mac - fast!)
         print("Performing speaker diarization...")
         diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=device)
         diar_segments = diarize_model(audio)
@@ -96,6 +173,8 @@ def transcribe_audio(audio_path, hf_token, model_size="large-v2", device="cuda" 
 
     except Exception as e:
         print(f"Error during transcription: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def format_output(result, output_path):
@@ -119,13 +198,14 @@ def format_timestamp(seconds):
 
 def process_file(file_path, hf_token, args):
     """Processes a single file."""
-    print(f"\n--- Processing: {file_path} ---")
+    print(f"\n{'='*50}")
+    print(f"Processing: {file_path}")
+    print(f"{'='*50}")
     
-    # Determine output path always in 'output' folder if it exists
+    # Determine output path
     base_name = os.path.basename(file_path)
     file_name = os.path.splitext(base_name)[0]
     
-    # Ensure output directory exists
     output_dir = "output"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -136,23 +216,32 @@ def process_file(file_path, hf_token, args):
         print(f"Output file already exists: {output_file}. Skipping...")
         return
 
+    start_time = time.time()
     result = transcribe_audio(
         file_path, 
         hf_token, 
         model_size=args.model, 
+        backend=args.backend,
         threads=args.threads, 
         language=args.language
     )
+    total_time = time.time() - start_time
     
     if result:
         format_output(result, output_file)
+        print(f"\n✅ Total processing time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Voice Transcriptor using WhisperX")
-    parser.add_argument("filename", help="Name of the audio file (looks in 'input/' folder first, then current path)")
-    parser.add_argument("--model", default="large-v2", help="Whisper model size (small, medium, large-v2). Default: large-v2")
-    parser.add_argument("--threads", type=int, default=4, help="Number of CPU threads for transcription. Default: 4")
-    parser.add_argument("--language", help="Force language code (e.g. 'en', 'fr', 'es') to skip detection")
+    parser = argparse.ArgumentParser(description="Voice Transcriptor - Fast transcription with speaker diarization")
+    parser.add_argument("filename", help="Name of the audio file (looks in 'input/' folder first)")
+    parser.add_argument("--model", default="large-v3-turbo", 
+                        help="Model: tiny, base, small, medium, large-v2, large-v3, large-v3-turbo (default)")
+    parser.add_argument("--backend", default="auto", choices=["auto", "mlx", "whisperx"],
+                        help="Backend: auto (MLX if available), mlx, whisperx")
+    parser.add_argument("--threads", type=int, default=4, 
+                        help="CPU threads (only for whisperx backend). Default: 4")
+    parser.add_argument("--language", 
+                        help="Force language code (e.g. 'en', 'fr', 'es') to skip detection")
     
     args = parser.parse_args()
     
@@ -160,12 +249,10 @@ if __name__ == "__main__":
     input_folder = "input"
     file_path = args.filename
     
-    # 1. Check if it's in input folder (preferred)
     possible_path = os.path.join(input_folder, args.filename)
     if os.path.exists(possible_path):
         file_path = possible_path
     elif not os.path.exists(file_path):
-        # 2. If not in input, and not found as absolute/relative path -> Error
         print(f"Error: File not found: {args.filename}")
         print(f"Checked: '{file_path}' and '{possible_path}'")
         exit(1)
